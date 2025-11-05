@@ -1,0 +1,17 @@
+﻿using System;
+using System.Web.UI.HtmlControls;
+
+public partial class PHU01_CNF : GalLogicWebForm
+{
+    protected void Page_Load(object sender, EventArgs e){}
+    protected override void OnInit(EventArgs e)
+    {
+        base.OnInit(e);
+        this.gx_preFillForm += new EventHandler(page_preFillForm);
+    }
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+    }
+    
+}

@@ -1,0 +1,26 @@
+﻿using com.sabratec.applinx.baseobject;
+using System;
+using System.Collections.Generic;
+using System.Web;
+using System.Web.UI;
+using System.Web.UI.HtmlControls;
+using System.Web.UI.WebControls;
+
+public partial class T1U01S_ADD : GalLogicWebForm
+{
+    protected void Page_Load(object sender, EventArgs e){}
+    protected override void OnInit(EventArgs e)
+    {
+        base.OnInit(e);
+        this.gx_preFillForm += new EventHandler(page_preFillForm);
+    }
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+    }
+    protected void page_preFillForm(object sender, EventArgs e)
+    {
+        FillComboBox(globalCarrier_AGC, AppCache.GetTableData("T23", new string[] { "G", "SHP", "VIA" }));
+    }
+
+}

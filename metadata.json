@@ -1,0 +1,5 @@
+{
+  "name": "XML to JSON Converter with Gemini",
+  "description": "An application that takes an XML file as input, sends it to the Gemini API with specific instructions to extract and structure data, and displays the resulting JSON.",
+  "requestFramePermissions": []
+}

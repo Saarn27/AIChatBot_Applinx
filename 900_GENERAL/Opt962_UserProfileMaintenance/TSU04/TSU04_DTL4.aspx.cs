@@ -1,0 +1,29 @@
+﻿using System;
+
+public partial class TSU04_DTL4 : GalLogicWebForm
+{
+    protected void Page_Load(object sender, EventArgs e){}
+    protected override void OnInit(EventArgs e)
+    {
+        base.OnInit(e);
+        this.gx_preFillForm += new EventHandler(page_preFillForm);
+    }
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+    }
+    protected void page_preFillForm(object sender, EventArgs e)
+    {
+        // Occurs before gx_fillForm() or gx_fillForm(GXScreensCollection screen)
+        try
+        {
+            CreateToolBar(hostKeysToolbar,new string[] {"next tab","update"});
+        }
+        catch (Exception error)
+        {
+            Console.Write(error);
+        }
+        FillComboBox(GwebLanguage_DA4, AppCache.GetTableData("T23", new string[] { "G", "GEN", "LNG" }));
+        FillComboBox(FollowUpOption_DA1, AppCache.GetTableData("T23", new string[] { "X", "GEN", "FUP" }, new string[] { "T23COD", "T23DSCL" }));
+    }
+}

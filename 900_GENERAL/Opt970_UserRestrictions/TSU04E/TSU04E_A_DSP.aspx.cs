@@ -1,0 +1,30 @@
+﻿using System;
+using System.Web.UI.HtmlControls;
+
+public partial class TSU04E_A_DSP : GalLogicWebForm
+{
+    protected void Page_Load(object sender, EventArgs e) { }
+    protected override void OnInit(EventArgs e)
+    {
+        base.OnInit(e);
+        this.gx_preFillForm += new EventHandler(page_preFillForm);
+    }
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+    }
+    protected void page_preFillForm(object sender, EventArgs e)
+    {
+        try
+        {
+            CreateToolBar(hostKeysToolbar, new string[] { "update" });
+        }
+        catch (Exception error)
+        {
+            Console.Write(error);
+        }
+        FillComboBox(warehouse, AppCache.GetTableData("TW", new string[] { }));
+        ToggleIndicatorField(new string[] { "Restriction" }, hiddenField, true, true);
+
+    }
+}
