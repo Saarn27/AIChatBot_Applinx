@@ -3,7 +3,7 @@ import React, { useState, useCallback } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { CodeDisplay } from './components/CodeDisplay';
 import { Spinner } from './components/Spinner';
-import { convertXmlToJson } from './services/geminiService';
+import { convertXmlToJson } from './services/azureOpenAiService';
 import { GithubIcon } from './components/icons/GithubIcon';
 
 // Extract only <Mapping> attributes (inline values) and the <Core> elements inside each Mapping.
