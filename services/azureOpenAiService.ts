@@ -125,7 +125,7 @@ function getEndpoint(): string {
     typeof process !== 'undefined' && process?.env ? readFromEnv(process.env as MaybeEnv, keys) : undefined;
 
   const endpoint = fromImportMeta ?? fromProcess;
-
+  console.log(endpoint);
   console.log('Using Azure OpenAI Endpoint:', endpoint ? 'FOUND' : 'MISSING');
   if (!endpoint)
     throw new Error('Missing Azure OpenAI endpoint. Set ENDPOINT_URL or AZURE_OPENAI_ENDPOINT.');
