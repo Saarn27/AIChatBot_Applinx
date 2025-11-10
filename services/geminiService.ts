@@ -96,19 +96,6 @@ function readFromEnv(env: MaybeEnv, keys: string[]): string | undefined {
   return undefined;
 }
 
-type MaybeEnv = Record<string, string | undefined> | undefined;
-
-function readFromEnv(env: MaybeEnv, keys: string[]): string | undefined {
-  if (!env) return undefined;
-  for (const key of keys) {
-    const direct = env[key];
-    if (direct) return direct;
-    const vitePrefixed = env[`VITE_${key}`];
-    if (vitePrefixed) return vitePrefixed;
-  }
-  return undefined;
-}
-
 function getApiKey(): string {
   const keys = ['API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY'];
 
