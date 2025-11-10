@@ -174,7 +174,17 @@ export async function convertXmlToJsonRaw(xmlContent: string): Promise<string> {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}: ${JSON.stringify(data)}`);
+    const errorJson = JSON.stringify(data);
+    const message = `${res.status} ${res.statusText}: ${errorJson}`;
+
+    const lower = errorJson.toLowerCase();
+    if (res.status === 400 && lower.includes('api key not valid')) {
+      throw new Error(
+        'The Gemini API rejected the provided key. Double-check that GEMINI_API_KEY (or GOOGLE_API_KEY) is set to a valid key from Google AI Studio.'
+      );
+    }
+
+    throw new Error(message);
   }
 
   const text = extractTextFromResponse(data);
