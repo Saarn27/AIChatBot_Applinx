@@ -1,6 +1,4 @@
 // geminiService.ts
-import 'dotenv/config';
-
 /** ==== Prompt (unchanged) ==== */
 const PROMPT_TEMPLATE = `
 You are an expert XML to JSON converter. Your task is to analyze the provided XML and extract specific fields into a structured JSON format.
@@ -70,12 +68,33 @@ function normalizeKey(k?: string): string {
   return (k ?? '').trim().replace(/\r?\n/g, '');
 }
 
+type MaybeEnv = Record<string, string | undefined> | undefined;
+
+function readFromEnv(env: MaybeEnv, keys: string[]): string | undefined {
+  if (!env) return undefined;
+  for (const key of keys) {
+    const direct = env[key];
+    if (direct) return direct;
+    const vitePrefixed = env[`VITE_${key}`];
+    if (vitePrefixed) return vitePrefixed;
+  }
+  return undefined;
+}
+
 function getApiKey(): string {
-  const apiKey = normalizeKey(
-    process.env.API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY
-  );
+  const keys = ['API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY'];
+
+  const fromImportMeta =
+    typeof import.meta !== 'undefined' ? readFromEnv((import.meta as any)?.env, keys) : undefined;
+
+  const fromProcess =
+    typeof process !== 'undefined' && process?.env ? readFromEnv(process.env as MaybeEnv, keys) : undefined;
+
+  const apiKey = normalizeKey(fromImportMeta || fromProcess);
+
   console.log('Using Gemini API Key:', apiKey ? 'FOUND' : 'MISSING');
-  if (!apiKey) throw new Error('Missing API key. Set API_KEY or GOOGLE_API_KEY (or GEMINI_API_KEY).');
+  if (!apiKey)
+    throw new Error('Missing API key. Set API_KEY or GOOGLE_API_KEY (or GEMINI_API_KEY).');
   return apiKey;
 }
 
