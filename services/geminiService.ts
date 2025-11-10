@@ -64,8 +64,36 @@ export type Output = {
 };
 
 /** ==== Helpers ==== */
-function normalizeKey(k?: string): string {
-  return (k ?? '').trim().replace(/\r?\n/g, '');
+type MaybeEnv = Record<string, string | undefined> | undefined;
+
+function cleanEnvValue(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+
+  let value = String(raw).replace(/\r?\n/g, '').trim();
+  if (!value) return undefined;
+
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    value = value.slice(1, -1).trim();
+    if (!value) return undefined;
+  }
+
+  const lower = value.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') return undefined;
+
+  return value;
+}
+
+function readFromEnv(env: MaybeEnv, keys: string[]): string | undefined {
+  if (!env) return undefined;
+  for (const key of keys) {
+    const direct = cleanEnvValue(env[key]);
+    if (direct) return direct;
+    const vitePrefixed = cleanEnvValue(env[`VITE_${key}`]);
+    if (vitePrefixed) return vitePrefixed;
+  }
+  return undefined;
 }
 
 type MaybeEnv = Record<string, string | undefined> | undefined;
@@ -90,7 +118,7 @@ function getApiKey(): string {
   const fromProcess =
     typeof process !== 'undefined' && process?.env ? readFromEnv(process.env as MaybeEnv, keys) : undefined;
 
-  const apiKey = normalizeKey(fromImportMeta || fromProcess);
+  const apiKey = fromImportMeta ?? fromProcess;
 
   console.log('Using Gemini API Key:', apiKey ? 'FOUND' : 'MISSING');
   if (!apiKey)
