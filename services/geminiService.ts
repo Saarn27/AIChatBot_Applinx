@@ -1,4 +1,4 @@
-// geminiService.ts
+// azureOpenAIService.ts (retains original prompt semantics)
 /** ==== Prompt (unchanged) ==== */
 const PROMPT_TEMPLATE = `
 You are an expert XML to JSON converter. Your task is to analyze the provided XML and extract specific fields into a structured JSON format.
@@ -97,7 +97,7 @@ function readFromEnv(env: MaybeEnv, keys: string[]): string | undefined {
 }
 
 function getApiKey(): string {
-  const keys = ['API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY'];
+  const keys = ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_KEY', 'OPENAI_API_KEY', 'API_KEY'];
 
   const fromImportMeta =
     typeof import.meta !== 'undefined' ? readFromEnv((import.meta as any)?.env, keys) : undefined;
@@ -107,18 +107,79 @@ function getApiKey(): string {
 
   const apiKey = fromImportMeta ?? fromProcess;
 
-  console.log('Using Gemini API Key:', apiKey ? 'FOUND' : 'MISSING');
+  console.log('Using Azure OpenAI API Key:', apiKey ? 'FOUND' : 'MISSING');
   if (!apiKey)
-    throw new Error('Missing API key. Set API_KEY or GOOGLE_API_KEY (or GEMINI_API_KEY).');
+    throw new Error(
+      'Missing Azure OpenAI API key. Set AZURE_OPENAI_API_KEY (or AZURE_OPENAI_KEY / OPENAI_API_KEY).'
+    );
   return apiKey;
 }
 
+function getEndpoint(): string {
+  const keys = ['ENDPOINT_URL', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_ENDPOINT_URL'];
+
+  const fromImportMeta =
+    typeof import.meta !== 'undefined' ? readFromEnv((import.meta as any)?.env, keys) : undefined;
+
+  const fromProcess =
+    typeof process !== 'undefined' && process?.env ? readFromEnv(process.env as MaybeEnv, keys) : undefined;
+
+  const endpoint = fromImportMeta ?? fromProcess;
+
+  console.log('Using Azure OpenAI Endpoint:', endpoint ? 'FOUND' : 'MISSING');
+  if (!endpoint)
+    throw new Error('Missing Azure OpenAI endpoint. Set ENDPOINT_URL or AZURE_OPENAI_ENDPOINT.');
+
+  return endpoint.replace(/\/+$/, '');
+}
+
+function getDeploymentName(): string {
+  const keys = ['DEPLOYMENT_NAME', 'AZURE_OPENAI_DEPLOYMENT', 'AZURE_OPENAI_DEPLOYMENT_NAME'];
+
+  const fromImportMeta =
+    typeof import.meta !== 'undefined' ? readFromEnv((import.meta as any)?.env, keys) : undefined;
+
+  const fromProcess =
+    typeof process !== 'undefined' && process?.env ? readFromEnv(process.env as MaybeEnv, keys) : undefined;
+
+  const deployment = fromImportMeta ?? fromProcess;
+
+  console.log('Using Azure OpenAI Deployment:', deployment ? 'FOUND' : 'MISSING');
+  if (!deployment)
+    throw new Error('Missing Azure OpenAI deployment name. Set DEPLOYMENT_NAME or AZURE_OPENAI_DEPLOYMENT.');
+
+  return deployment;
+}
+
 function extractTextFromResponse(data: any): string {
-  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
-  for (const c of candidates) {
-    const parts = c?.content?.parts ?? [];
-    const text = parts.map((p: any) => p?.text ?? '').join('').trim();
-    if (text) return text;
+  const choices = Array.isArray(data?.choices) ? data.choices : [];
+  for (const choice of choices) {
+    const deltaContent = choice?.delta?.content;
+    if (typeof deltaContent === 'string' && deltaContent.trim()) {
+      return deltaContent.trim();
+    }
+
+    if (Array.isArray(deltaContent)) {
+      const fromDelta = deltaContent
+        .map((item) => (typeof item?.text === 'string' ? item.text : ''))
+        .join('')
+        .trim();
+      if (fromDelta) return fromDelta;
+    }
+
+    const message = choice?.message;
+    if (typeof message?.content === 'string') {
+      const trimmed = message.content.trim();
+      if (trimmed) return trimmed;
+    }
+
+    if (Array.isArray(message?.content)) {
+      const text = message.content
+        .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+        .join('')
+        .trim();
+      if (text) return text;
+    }
   }
   return '';
 }
@@ -153,22 +214,35 @@ function coerceOutput(o: any): Output {
 /** ==== Low-level call – returns RAW JSON string if you need it ==== */
 export async function convertXmlToJsonRaw(xmlContent: string): Promise<string> {
   const apiKey = getApiKey();
+  const endpoint = getEndpoint();
+  const deployment = getDeploymentName();
   const prompt = PROMPT_TEMPLATE.replace('{{XML_CONTENT}}', xmlContent);
 
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/` +
-    `gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(
+    deployment
+  )}/chat/completions?api-version=2025-01-01-preview`;
 
   const body = {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
-      responseMimeType: 'application/json',
-    },
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: prompt,
+          },
+        ],
+      },
+    ],
+    response_format: { type: 'json_object' },
   };
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'api-key': apiKey,
+    },
     body: JSON.stringify(body),
   });
 
@@ -178,9 +252,9 @@ export async function convertXmlToJsonRaw(xmlContent: string): Promise<string> {
     const message = `${res.status} ${res.statusText}: ${errorJson}`;
 
     const lower = errorJson.toLowerCase();
-    if (res.status === 400 && lower.includes('api key not valid')) {
+    if (res.status === 401 && lower.includes('access denied')) {
       throw new Error(
-        'The Gemini API rejected the provided key. Double-check that GEMINI_API_KEY (or GOOGLE_API_KEY) is set to a valid key from Google AI Studio.'
+        'Azure OpenAI rejected the provided API key. Ensure AZURE_OPENAI_API_KEY (or equivalent) is set to a valid key with access to the deployment.'
       );
     }
 
