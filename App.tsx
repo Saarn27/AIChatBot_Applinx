@@ -6,62 +6,120 @@ import { Spinner } from './components/Spinner';
 import { convertXmlToJson } from './services/geminiService';
 import { GithubIcon } from './components/icons/GithubIcon';
 
-// Extracts all <mapping>/<Mapping> elements and returns a combined string wrapped in <Mappings>.
+// Extract only <Mapping> attributes (inline values) and the <Core> elements inside each Mapping.
 function extractMappingsXml(xml: string): string {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(xml, 'application/xml');
-
     // Check for parser errors
     const parserErrors = doc.getElementsByTagName('parsererror');
     if (parserErrors && parserErrors.length > 0) {
-      // Fallback to regex if XML parsing fails
-      const mappingMatches = xml.match(/<(?:\w+:)?mapping\b[\s\S]*?<\/(?:\w+:)?mapping>/gi) || [];
-      const coreMatchesAll = xml.match(/<(?:\w+:)?Core\b[\s\S]*?\/>|<(?:\w+:)?Core\b[\s\S]*?<\/(?:\w+:)?Core>/gi) || [];
-      const type3Cores = coreMatchesAll.filter(m => /\bType\s*=\s*["']3["']/i.test(m));
-      const lastType3Core = type3Cores.length ? type3Cores[type3Cores.length - 1] : '';
-      if (mappingMatches.length) {
-        return `<Mappings>\n${mappingMatches.join('\n')}${lastType3Core ? `\n${lastType3Core}` : ''}\n</Mappings>`;
-      }
-      return '';
+      // Regex fallback: keep Mapping open-tag attributes and all nested Core blocks
+      const mappingBlocks = xml.match(/<(?:\w+:)?mapping\b[\s\S]*?<\/(?:\w+:)?mapping>/gi) || [];
+      if (!mappingBlocks.length) return '';
+      const reduced = mappingBlocks.map((block) => {
+        const open = block.match(/<((?:\w+:)?mapping)\b([^>]*)>/i);
+        const qname = open ? open[1] : 'Mapping';
+        const attrs = open ? (open[2] || '') : '';
+        const cores = block.match(/<(?:\w+:)?Core\b[\s\S]*?(?:\/>|<\/(?:\w+:)?Core>)/gi) || [];
+        return `<${qname}${attrs}>${cores.join('')}</${qname}>`;
+      });
+      return `<Mappings>\n${reduced.join('\n')}\n</Mappings>`;
     }
-
-    // Gather all mapping elements and track last Core Type="1" (case- and namespace-insensitive)
+    // Collect Mapping elements (namespace- and case-insensitive)
     const mappings: Element[] = [];
-    let lastType1Core: Element | null = null;
-    const all = doc.getElementsByTagName('*');
-    for (let i = 0; i < all.length; i++) {
-      const el = all.item(i) as Element;
-      const name = ((el as any).localName || (el as any).tagName || '').toString();
-      const lname = name ? name.toLowerCase() : '';
-      if (lname === 'mapping') {
-        mappings.push(el);
-      }
-      if (lname === 'core') {
-        const typeAttr = el.getAttribute('Type') ?? el.getAttribute('type') ?? el.getAttribute('TYPE');
-        if ((typeAttr ?? '').trim() === '3') {
-          lastType1Core = el; // will end as last in document order
+    const hasEvaluate = typeof (doc as any).evaluate === 'function';
+    if (hasEvaluate) {
+      try {
+        const xpath = '//*[translate(local-name(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="mapping"]';
+        const snapshot = (doc as any).evaluate(xpath, doc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        for (let i = 0; i < snapshot.snapshotLength; i++) {
+          const node = snapshot.snapshotItem(i) as Element;
+          if (node) mappings.push(node);
+        }
+      } catch {
+        // Fallback to generic scan
+        const all = doc.getElementsByTagName('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all.item(i) as Element;
+          const lname = ((el as any).localName || '').toString().toLowerCase();
+          if (lname === 'mapping') mappings.push(el);
         }
       }
+    } else {
+      const all = doc.getElementsByTagName('*');
+      for (let i = 0; i < all.length; i++) {
+        const el = all.item(i) as Element;
+        const lname = ((el as any).localName || '').toString().toLowerCase();
+        if (lname === 'mapping') mappings.push(el);
+      }
     }
-
     if (!mappings.length) {
       // Fallback to regex even if parsing succeeded
       const matches = xml.match(/<(?:\w+:)?mapping\b[\s\S]*?<\/(?:\w+:)?mapping>/gi);
       return matches && matches.length ? `<Mappings>\n${matches.join('\n')}\n</Mappings>` : '';
     }
-
+    // Build reduced Mapping nodes: keep only inline attributes and nested Core elements
     const serializer = new XMLSerializer();
-    const serialized = mappings.map(el => serializer.serializeToString(el));
-    const lastCoreXml = lastType1Core ? serializer.serializeToString(lastType1Core) : '';
-    return `<Mappings>\n${serialized.join('\n')}${lastCoreXml ? `\n${lastCoreXml}` : ''}\n</Mappings>`;
+    const reduced: string[] = [];
+    for (const mapEl of mappings) {
+      const qname = ((mapEl as any).tagName || (mapEl as any).nodeName) as string;
+      const mappingOut = doc.createElementNS(mapEl.namespaceURI || undefined, qname);
+      // Copy attributes (inline values)
+      for (let i = 0; i < mapEl.attributes.length; i++) {
+        const attr = mapEl.attributes[i];
+        try {
+          mappingOut.setAttributeNS(attr.namespaceURI, attr.name, attr.value);
+        } catch {
+          mappingOut.setAttribute(attr.name, attr.value);
+        }
+      }
+      // Collect Core descendants of this Mapping (namespace- and case-insensitive)
+      const coreNodes: Element[] = [];
+      if (hasEvaluate) {
+        try {
+          const xpath = './/*[translate(local-name(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="core"]';
+          const snapshot = (doc as any).evaluate(xpath, mapEl, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          for (let i = 0; i < snapshot.snapshotLength; i++) {
+            const n = snapshot.snapshotItem(i) as Element;
+            if (n) coreNodes.push(n);
+          }
+        } catch {
+          const all = mapEl.getElementsByTagName('*');
+          for (let i = 0; i < all.length; i++) {
+            const el = all.item(i) as Element;
+            const lname = ((el as any).localName || '').toString().toLowerCase();
+            if (lname === 'core') coreNodes.push(el);
+          }
+        }
+      } else {
+        const all = mapEl.getElementsByTagName('*');
+        for (let i = 0; i < all.length; i++) {
+          const el = all.item(i) as Element;
+          const lname = ((el as any).localName || '').toString().toLowerCase();
+          if (lname === 'core') coreNodes.push(el);
+        }
+      }
+      // Append clones of Core nodes only
+      for (const core of coreNodes) {
+        const clone = core.cloneNode(true);
+        mappingOut.appendChild(clone);
+      }
+      reduced.push(serializer.serializeToString(mappingOut));
+    }
+    return `<Mappings>\n${reduced.join('\n')}\n</Mappings>`;
   } catch {
-    // Fallback to regex on unexpected errors
-    const mappingMatches = xml.match(/<(?:\w+:)?mapping\b[\s\S]*?<\/(?:\w+:)?mapping>/gi) || [];
-    const coreMatchesAll = xml.match(/<(?:\w+:)?Core\b[\s\S]*?\/>|<(?:\w+:)?Core\b[\s\S]*?<\/(?:\w+:)?Core>/gi) || [];
-    const type1Cores = coreMatchesAll.filter(m => /\bType\s*=\s*["']1["']/i.test(m));
-    const lastType1Core = type1Cores.length ? type1Cores[type1Cores.length - 1] : '';
-    return mappingMatches.length ? `<Mappings>\n${mappingMatches.join('\n')}${lastType1Core ? `\n${lastType1Core}` : ''}\n</Mappings>` : '';
+    // Regex fallback on unexpected errors
+    const mappingBlocks = xml.match(/<(?:\w+:)?mapping\b[\s\S]*?<\/(?:\w+:)?mapping>/gi) || [];
+    if (!mappingBlocks.length) return '';
+    const reduced = mappingBlocks.map((block) => {
+      const open = block.match(/<((?:\w+:)?mapping)\b([^>]*)>/i);
+      const qname = open ? open[1] : 'Mapping';
+      const attrs = open ? (open[2] || '') : '';
+      const cores = block.match(/<(?:\w+:)?Core\b[\s\S]*?(?:\/>|<\/(?:\w+:)?Core>)/gi) || [];
+      return `<${qname}${attrs}>${cores.join('')}</${qname}>`;
+    });
+    return `<Mappings>\n${reduced.join('\n')}\n</Mappings>`;
   }
 }
 
@@ -104,13 +162,16 @@ const App: React.FC = () => {
 
     try {
       const result = await convertXmlToJson(xmlContent);
+      // Normalize result to a string (convert non-string outputs to JSON) before parsing
+      const rawText = typeof result === 'string' ? result : JSON.stringify(result);
+
       // Attempt to prettify the JSON
       try {
-        const parsedJson = JSON.parse(result);
+        const parsedJson = JSON.parse(rawText);
         setJsonOutput(JSON.stringify(parsedJson, null, 2));
       } catch (parseError) {
         // If parsing fails, just show the raw text from Gemini
-        setJsonOutput(result);
+        setJsonOutput(rawText);
       }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred.';
@@ -129,7 +190,7 @@ const App: React.FC = () => {
              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-brand-primary" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M14.89,14.24l2.83,2.83-1.41,1.41-2.83-2.83a2,2,0,0,1,0-2.82,2,2,0,0,1,1.41,0m-3.48-3.48a2,2,0,0,1,2.83,0l2.83,2.83-1.41,1.41-2.83-2.83a2,2,0,0,1,0-2.82M14.12,6.93a2,2,0,0,1,2.83,0l2.83,2.83-1.41,1.41-2.83-2.83a2,2,0,0,1,0-2.82M9.46,7.76l2.83,2.83-1.41,1.41-2.83-2.83a2,2,0,0,1,0-2.82,2,2,0,0,1,1.41,0M6,11.31a2,2,0,0,1,2.83,0l2.83,2.83L10.24,15.56,7.41,12.73a2,2,0,0,1,0-2.82,2,2,0,0,1-1.41,1.4Z"/>
              </svg>
-            <h1 className="text-2xl font-bold text-gray-100 tracking-tight">XML to JSON Converter with Gemini</h1>
+            <h1 className="text-2xl font-bold text-gray-100 tracking-tight">XML to ASPX Converter</h1>
           </div>
           <a href="https://github.com/google/generative-ai-docs/tree/main/site/en/gemini-api/docs/get-started/tutorial_walkthroughs" target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white transition-colors">
             <GithubIcon className="w-7 h-7" />
@@ -144,7 +205,7 @@ const App: React.FC = () => {
               <ul className="list-disc list-inside space-y-2 text-dark-text-secondary text-sm">
                 <li>Upload an XML file containing form or screen data.</li>
                 <li>The app will display the raw XML content.</li>
-                <li>Click "Process with Gemini" to start the conversion.</li>
+                <li>Click "Convert" to start the conversion.</li>
                 <li>Gemini analyzes the XML and extracts data based on a specific set of rules.</li>
                 <li>The structured JSON output will appear on the right.</li>
               </ul>

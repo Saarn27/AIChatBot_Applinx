@@ -1,6 +1,7 @@
+// geminiService.ts
+import 'dotenv/config';
 
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-
+/** ==== Prompt (unchanged) ==== */
 const PROMPT_TEMPLATE = `
 You are an expert XML to JSON converter. Your task is to analyze the provided XML and extract specific fields into a structured JSON format.
 
@@ -27,10 +28,10 @@ Focus exclusively on the contents that appear inside <Mapping> elements. The inp
    - Find the LAST <Core> element (in document order) where the attribute Type="1" within the provided input.
    - Read its Name attribute (a string).
    - Set special_cell:
-   screen_option = Name.split('/')[2].match(/\d+/)[0] (the numeric part after the second slash in the Name).
+   screen_option = Name.split('/')[2].match(/\\d+/)[0] (the numeric part after the second slash in the Name).
    option_name = Name.split('/')[3] (the part after the third slash in the Name).
    screen_name = Name.split('/')[4] (the part after the fourth slash in the Name).
-   - If no such <Core Type="3"> exists, set all three to null.
+   - If no such <Core Type="1"> exists, set all three to null.
 
 Here is the XML content to process:
 ---
@@ -39,38 +40,134 @@ Here is the XML content to process:
 \`\`\`
 ---
 
-Provide ONLY the final JSON output inside a single JSON code block. Do not include any extra explanations or markdown formatting around the JSON.
+Return ONLY valid JSON (no prose, no code fences).
 `;
 
+/** ==== Types ==== */
+export type Field = {
+  val_name: string;
+  label: string;
+  row: number;
+  col: number;
+  val_length: number;
+  is_protected: boolean;
+  is_col: boolean;
+  is_description: boolean;
+  has_description: string | null;
+};
 
-export async function convertXmlToJson(xmlContent: string): Promise<string> {
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set.");
-    }
+export type Output = {
+  special_cell: {
+    screen_option: string | null;
+    option_name: string | null;
+    screen_name: string | null;
+  };
+  fields: Field[];
+};
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-    const prompt = PROMPT_TEMPLATE.replace('{{XML_CONTENT}}', xmlContent);
-
-    try {
-        const response: GenerateContentResponse = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-        });
-        
-        // Clean up the response to get only the JSON part
-        let text = response.text.trim();
-        if (text.startsWith('```json')) {
-            text = text.substring(7);
-        }
-        if (text.endsWith('```')) {
-            text = text.substring(0, text.length - 3);
-        }
-
-        return text.trim();
-
-    } catch (error) {
-        console.error("Error calling Gemini API:", error);
-        throw new Error("Failed to get a response from Gemini API.");
-    }
+/** ==== Helpers ==== */
+function normalizeKey(k?: string): string {
+  return (k ?? '').trim().replace(/\r?\n/g, '');
 }
+
+function getApiKey(): string {
+  const apiKey = normalizeKey(
+    process.env.API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY
+  );
+  console.log('Using Gemini API Key:', apiKey ? 'FOUND' : 'MISSING');
+  if (!apiKey) throw new Error('Missing API key. Set API_KEY or GOOGLE_API_KEY (or GEMINI_API_KEY).');
+  return apiKey;
+}
+
+function extractTextFromResponse(data: any): string {
+  const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+  for (const c of candidates) {
+    const parts = c?.content?.parts ?? [];
+    const text = parts.map((p: any) => p?.text ?? '').join('').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+/** Coerce to stable shape so callers can safely .reduce on fields */
+function coerceOutput(o: any): Output {
+  const special = o?.special_cell ?? {};
+  const fieldsRaw = Array.isArray(o?.fields) ? o.fields : [];
+
+  const fields: Field[] = fieldsRaw.map((f: any) => ({
+    val_name: String(f?.val_name ?? ''),
+    label: String(f?.label ?? ''),
+    row: Number.isFinite(f?.row) ? Number(f.row) : 0,
+    col: Number.isFinite(f?.col) ? Number(f.col) : 0,
+    val_length: Number.isFinite(f?.val_length) ? Number(f.val_length) : 0,
+    is_protected: Boolean(f?.is_protected),
+    is_col: Boolean(f?.is_col),
+    is_description: Boolean(f?.is_description),
+    has_description: f?.has_description ?? null,
+  }));
+
+  return {
+    special_cell: {
+      screen_option: special?.screen_option ?? null,
+      option_name: special?.option_name ?? null,
+      screen_name: special?.screen_name ?? null,
+    },
+    fields,
+  };
+}
+
+/** ==== Low-level call – returns RAW JSON string if you need it ==== */
+export async function convertXmlToJsonRaw(xmlContent: string): Promise<string> {
+  const apiKey = getApiKey();
+  const prompt = PROMPT_TEMPLATE.replace('{{XML_CONTENT}}', xmlContent);
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+    },
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}: ${JSON.stringify(data)}`);
+  }
+
+  const text = extractTextFromResponse(data);
+  if (!text) throw new Error('Empty response from model.');
+  return text;
+}
+
+/** ==== Main export – returns PARSED & COERCED object ==== */
+export async function convertXmlToJson(xmlContent: string): Promise<Output> {
+  const raw = await convertXmlToJsonRaw(xmlContent);
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // salvage if model added stray text
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      parsed = JSON.parse(raw.slice(start, end + 1));
+    } else {
+      throw new Error('Model returned non-JSON text');
+    }
+  }
+
+  return coerceOutput(parsed);
+}
+
+/** Back-compat alias (if you previously imported convertXmlToJsoni) */
+export const convertXmlToJsoni = convertXmlToJson;
